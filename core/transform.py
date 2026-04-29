@@ -38,7 +38,7 @@ async def extract_venue(info: dict, all_venues: dict) -> str:
 # ----------------------------------------------------------------
 # MATCH
 # ----------------------------------------------------------------
-async def extract_match(match_id: str, info: dict, registry: dict) -> dict:
+async def extract_match(match_id: str, info: dict, registry: dict, innings: list) -> dict:
     """Extract flat match record from info block."""
     teams      = info.get('teams', [])
     toss       = info.get('toss', {})
@@ -55,20 +55,46 @@ async def extract_match(match_id: str, info: dict, registry: dict) -> dict:
     pom_name   = pom_list[0] if pom_list else None
     pom_cid    = registry.get(pom_name) if pom_name else None
 
+    # match result — 'win', 'tie', 'no result'
+    match_result = 'win'
+    if outcome.get('result'):
+        match_result = outcome.get('result')  # 'tie', 'no result', 'draw'
+
+    # super over winner — only present on ties
+    super_over_winner = outcome.get('eliminator', None)
+
+    # target — from second innings block
+    target_runs  = None
+    target_overs = None
+    for inning in innings:
+        target = inning.get('target', {})
+        if target:
+            target_runs  = target.get('runs')
+            target_overs = target.get('overs')
+            break
+
+    # match stage — final, qualifier, eliminator etc
+    match_stage = info.get('event', {}).get('stage', None)
+
     return {
-        'match_id':         match_id,
-        'season':           season,
-        'match_date':       match_date,
-        'venue_name':       info.get('venue', 'Unknown'),
-        'team1':            teams[0] if len(teams) > 0 else None,
-        'team2':            teams[1] if len(teams) > 1 else None,
-        'toss_winner':      toss.get('winner'),
-        'toss_decision':    toss.get('decision'),
-        'winner':           outcome.get('winner'),
-        'win_by_runs':      outcome_by.get('runs'),
-        'win_by_wickets':   outcome_by.get('wickets'),
-        'pom_cricsheet_id': pom_cid,
-        'match_number':     info.get('event', {}).get('match_number'),
+        'match_id':          match_id,
+        'season':            season,
+        'match_date':        match_date,
+        'venue_name':        info.get('venue', 'Unknown'),
+        'team1':             teams[0] if len(teams) > 0 else None,
+        'team2':             teams[1] if len(teams) > 1 else None,
+        'toss_winner':       toss.get('winner'),
+        'toss_decision':     toss.get('decision'),
+        'winner':            outcome.get('winner'),
+        'win_by_runs':       outcome_by.get('runs'),
+        'win_by_wickets':    outcome_by.get('wickets'),
+        'pom_cricsheet_id':  pom_cid,
+        'match_number':      info.get('event', {}).get('match_number'),
+        'target_runs':       target_runs,
+        'target_overs':      target_overs,
+        'match_stage':       match_stage,
+        'match_result':      match_result,
+        'super_over_winner': super_over_winner,
     }
 
 
@@ -80,7 +106,9 @@ async def extract_deliveries(match_id: str, innings: list, registry: dict) -> li
     deliveries = []
 
     for inning_idx, inning in enumerate(innings):
-        inning_num = inning_idx + 1
+        inning_num   = inning_idx + 1
+        batting_team = inning.get('team')                        # batting team name
+        is_super_over = inning.get('super_over', False)          # super over flag
 
         for over in inning.get('overs', []):
             over_num = over.get('over')
@@ -90,22 +118,29 @@ async def extract_deliveries(match_id: str, innings: list, registry: dict) -> li
                 extras  = delivery.get('extras', {})
                 wickets = delivery.get('wickets', [])
 
-                extra_type  = list(extras.keys())[0] if extras else None
+                extra_type = list(extras.keys())[0] if extras else None
 
                 is_wicket   = len(wickets) > 0
                 wicket_kind = None
                 dismissed   = None
+                fielder     = None
 
                 if is_wicket:
                     first_wicket = wickets[0]
                     wicket_kind  = first_wicket.get('kind')
                     dismissed    = first_wicket.get('player_out')
 
+                    # fielder — take first fielder from array
+                    fielders = first_wicket.get('fielders', [])
+                    if fielders:
+                        fielder = fielders[0].get('name')
+
                 deliveries.append({
                     'match_id':        match_id,
                     'inning':          inning_num,
                     'over_num':        over_num,
                     'ball_num':        ball_idx,
+                    'batting_team':    batting_team,             # resolved to FK in load
                     'batter_cid':      registry.get(delivery.get('batter')),
                     'bowler_cid':      registry.get(delivery.get('bowler')),
                     'non_striker_cid': registry.get(delivery.get('non_striker')),
@@ -116,6 +151,8 @@ async def extract_deliveries(match_id: str, innings: list, registry: dict) -> li
                     'is_wicket':       is_wicket,
                     'wicket_kind':     wicket_kind,
                     'dismissed_cid':   registry.get(dismissed) if dismissed else None,
+                    'fielder_cid':     registry.get(fielder) if fielder else None,
+                    'is_super_over':   is_super_over,
                 })
 
     return deliveries
@@ -129,12 +166,13 @@ async def transform_match(match: dict, all_players: dict, all_venues: dict) -> t
     match_id = match['_match_id']
     info     = match['info']
     registry = info.get('registry', {}).get('people', {})
+    innings  = match.get('innings', [])
 
     await extract_players(info, all_players)
     await extract_venue(info, all_venues)
 
-    match_record = await extract_match(match_id, info, registry)
-    deliveries   = await extract_deliveries(match_id, match.get('innings', []), registry)
+    match_record = await extract_match(match_id, info, registry, innings)
+    deliveries   = await extract_deliveries(match_id, innings, registry)
 
     return match_record, deliveries
 
@@ -152,7 +190,7 @@ async def transform(raw: list) -> dict:
     all_venues     = {}
     all_deliveries = []
 
-    tasks = [transform_match(match, all_players, all_venues) for match in raw]
+    tasks   = [transform_match(match, all_players, all_venues) for match in raw]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for i, result in enumerate(results):
@@ -177,4 +215,3 @@ async def transform(raw: list) -> dict:
         'venues':     list(all_venues.values()),
         'deliveries': all_deliveries,
     }
-    
