@@ -4,15 +4,16 @@ logger = get_logger(__name__)
 
 
 async def extract_match_players(match_id: str, info: dict, registry: dict) -> list:
-    """
-    Extract all squad players per match per team.
-    Flags matches with 12 players as impact eligible (2023+ rule).
-    """
     match_players = []
     players_block = info.get('players', {})
+    
+    # Impact player rule introduced in IPL 2023
+    season = str(info.get('season', '')).strip()
+    is_2023_plus = season in ['2023', '2024', '2025', '2026']
 
     for team_name, player_names in players_block.items():
-        is_impact_eligible = len(player_names) == 12
+        # Both conditions must be true
+        is_impact_eligible = is_2023_plus and len(player_names) == 12
 
         for player_name in player_names:
             cricsheet_id = registry.get(player_name)
