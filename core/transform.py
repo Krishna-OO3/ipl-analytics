@@ -1,6 +1,6 @@
 import asyncio
 from utils.logger import get_logger
-from utils.helpers import normalize_season
+from utils.helpers import normalize_season, normalize_team_name
 from datetime import date
 
 logger = get_logger(__name__)
@@ -58,10 +58,10 @@ async def extract_match(match_id: str, info: dict, registry: dict, innings: list
     # match result — 'win', 'tie', 'no result'
     match_result = 'win'
     if outcome.get('result'):
-        match_result = outcome.get('result')  # 'tie', 'no result', 'draw'
+        match_result = outcome.get('result')
 
     # super over winner — only present on ties
-    super_over_winner = outcome.get('eliminator', None)
+    super_over_winner = normalize_team_name(outcome.get('eliminator', None))
 
     # target — from second innings block
     target_runs  = None
@@ -73,7 +73,7 @@ async def extract_match(match_id: str, info: dict, registry: dict, innings: list
             target_overs = target.get('overs')
             break
 
-    # match stage — final, qualifier, eliminator etc
+    # match stage
     match_stage = info.get('event', {}).get('stage', None)
 
     return {
@@ -81,11 +81,11 @@ async def extract_match(match_id: str, info: dict, registry: dict, innings: list
         'season':            season,
         'match_date':        match_date,
         'venue_name':        info.get('venue', 'Unknown'),
-        'team1':             teams[0] if len(teams) > 0 else None,
-        'team2':             teams[1] if len(teams) > 1 else None,
-        'toss_winner':       toss.get('winner'),
+        'team1':             normalize_team_name(teams[0] if len(teams) > 0 else None),
+        'team2':             normalize_team_name(teams[1] if len(teams) > 1 else None),
+        'toss_winner':       normalize_team_name(toss.get('winner')),
         'toss_decision':     toss.get('decision'),
-        'winner':            outcome.get('winner'),
+        'winner':            normalize_team_name(outcome.get('winner')),
         'win_by_runs':       outcome_by.get('runs'),
         'win_by_wickets':    outcome_by.get('wickets'),
         'pom_cricsheet_id':  pom_cid,
@@ -106,9 +106,9 @@ async def extract_deliveries(match_id: str, innings: list, registry: dict) -> li
     deliveries = []
 
     for inning_idx, inning in enumerate(innings):
-        inning_num   = inning_idx + 1
-        batting_team = inning.get('team')                        # batting team name
-        is_super_over = inning.get('super_over', False)          # super over flag
+        inning_num    = inning_idx + 1
+        batting_team  = normalize_team_name(inning.get('team'))
+        is_super_over = inning.get('super_over', False)
 
         for over in inning.get('overs', []):
             over_num = over.get('over')
@@ -129,9 +129,7 @@ async def extract_deliveries(match_id: str, innings: list, registry: dict) -> li
                     first_wicket = wickets[0]
                     wicket_kind  = first_wicket.get('kind')
                     dismissed    = first_wicket.get('player_out')
-
-                    # fielder — take first fielder from array
-                    fielders = first_wicket.get('fielders', [])
+                    fielders     = first_wicket.get('fielders', [])
                     if fielders:
                         fielder = fielders[0].get('name')
 
@@ -140,7 +138,7 @@ async def extract_deliveries(match_id: str, innings: list, registry: dict) -> li
                     'inning':          inning_num,
                     'over_num':        over_num,
                     'ball_num':        ball_idx,
-                    'batting_team':    batting_team,             # resolved to FK in load
+                    'batting_team':    batting_team,
                     'batter_cid':      registry.get(delivery.get('batter')),
                     'bowler_cid':      registry.get(delivery.get('bowler')),
                     'non_striker_cid': registry.get(delivery.get('non_striker')),
