@@ -179,10 +179,6 @@ async def transform_match(match: dict, all_players: dict, all_venues: dict) -> t
 # MAIN TRANSFORM ENTRY POINT
 # ----------------------------------------------------------------
 async def transform(raw: list) -> dict:
-    """
-    Transform all raw match JSONs into flat records.
-    Returns dict with keys: matches, players, venues, deliveries.
-    """
     all_matches    = []
     all_players    = {}
     all_venues     = {}

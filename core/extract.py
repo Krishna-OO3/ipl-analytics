@@ -7,15 +7,17 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Limit concurrent file opens to 100
+SEMAPHORE = asyncio.Semaphore(100)
 
 async def read_match_file(filepath: str, match_id: str) -> dict:
     """Read and parse a single match JSON file asynchronously."""
-    async with aiofiles.open(filepath, mode='r') as f:
-        content = await f.read()
-        data = json.loads(content)
-        data['_match_id'] = match_id
-        return data
-
+    async with SEMAPHORE:
+        async with aiofiles.open(filepath, mode='r') as f:
+            content = await f.read()
+            data = json.loads(content)
+            data['_match_id'] = match_id
+            return data
 
 async def extract() -> list:
     """
